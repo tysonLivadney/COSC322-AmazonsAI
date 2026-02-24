@@ -1,0 +1,1 @@
+packageSearchIndex = [{"l":"All Packages","u":"allpackages-index.html"},{"l":"ubc.cosc322"},{"l":"ygraph.ai.smartfox.games"},{"l":"ygraph.ai.smartfox.games.amazons"}];updateSearchResults();
