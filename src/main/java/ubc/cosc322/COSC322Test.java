@@ -31,7 +31,8 @@ public class COSC322Test extends GamePlayer{
      * @param args for name and passwd (current, any string would work)
      */
     public static void main(String[] args) {				 
-    	COSC322Test player = new COSC322Test("args[0]", "args[1]");
+    	COSC322Test player = new COSC322Test(args[0], "cosc322");
+		player.connect();
     	
     	if(player.getGameGUI() == null) {
     		player.Go();
@@ -64,17 +65,19 @@ public class COSC322Test extends GamePlayer{
 
     @Override
     public void onLogin() {
-    	userName = gameClient.getUserName();
+		userName = gameClient.getUserName();
     	if (gamegui != null) {
         	gamegui.setRoomInformation(gameClient.getRoomList());
+			System.out.println("Logged in");
     	}
     }
 	
     
 
-    @Override
+    @SuppressWarnings("unchecked")
+	@Override
 	public boolean handleGameMessage(String messageType, Map<String, Object> msgDetails) {
-		if (gamegui == null) return true;
+		if (gamegui == null) return false;
 
 		if (messageType.equals(GameMessage.GAME_STATE_BOARD)) {
 			ArrayList<Integer> board = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.GAME_STATE);
@@ -102,7 +105,7 @@ public class COSC322Test extends GamePlayer{
 
 	@Override
 	public BaseGameGUI getGameGUI() {
-		return  this.gamegui;
+		return this.gamegui;
 	}
 
 	@Override

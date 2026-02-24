@@ -1,0 +1,18 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "COSC322Test (Spectator)",
+            "request": "launch",
+            "mainClass": "ubc.cosc322.COSC322Test",
+            "args": ["spectator", "spectator"]
+        },
+        {
+            "type": "java",
+            "name": "HumanPlayer",
+            "request": "launch",
+            "mainClass": "ygraph.ai.smartfox.games.amazons.HumanPlayer"
+        },
+    ]
+}
