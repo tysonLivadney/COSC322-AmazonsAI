@@ -15,6 +15,8 @@ public class COSC322Test extends GamePlayer {
     private BaseGameGUI gamegui = null;
     private ArrayList<Integer> gameBoard = null;
     private int myColor = 0; // 1 = white, 2 = black
+    private int lastMoverColor = 0;
+    private AIPlayer ai;
 
     private String userName = null;
     private String passwd = null;
@@ -56,6 +58,7 @@ public class COSC322Test extends GamePlayer {
         if (messageType.equals(GameMessage.GAME_STATE_BOARD)) {
             gameBoard = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.GAME_STATE);
             gamegui.setGameState(gameBoard);
+            if (ai == null) ai = new AIPlayer();
 
         } else if (messageType.equals(GameMessage.GAME_ACTION_START)) {
             String blackPlayer = (String) msgDetails.get(AmazonsGameMessage.PLAYER_BLACK);
@@ -70,6 +73,11 @@ public class COSC322Test extends GamePlayer {
                 myColor = 1;
             }
             System.out.println("My color: " + (myColor == 2 ? "Black" : "White"));
+            if (myColor == 1 && gameBoard != null) {
+            if (ai == null) ai = new AIPlayer();
+            Move myMove = ai.chooseMove(gameBoard, myColor);
+            if (myMove != null) sendMove(myMove);
+            }
 
         } else if (messageType.equals(GameMessage.GAME_ACTION_MOVE)) {
             gamegui.updateGameState(msgDetails);
@@ -84,22 +92,34 @@ public class COSC322Test extends GamePlayer {
             int arrow = arrowPos.get(0) * 11 + arrowPos.get(1);
 
             int piece = gameBoard.get(from);
+            lastMoverColor = piece;
+
             gameBoard.set(from, 0);
             gameBoard.set(to, piece);
             gameBoard.set(arrow, 3);
 
+            if(piece != myColor){
+                if (ai == null) {
+                    ai = new AIPlayer();
+                }
+                Move myMove = ai.chooseMove(gameBoard, myColor);
+                if (myMove != null){
+                     sendMove(myMove);
+                }
+                else System.out.println("No legal moves available - I lose");
+            }
+
             // find and print my queens
-            ArrayList<int[]> myQueens = getQueenPositions(myColor);
+            ArrayList<int[]> myQueens = getQueenPositions(gameBoard, myColor);
             for (int[] q : myQueens) {
                 System.out.println("My queen at: " + q[0] + ", " + q[1]);
             }
-            makeRandomMove();
         }
 
         return true;
     }
 
-    private ArrayList<int[]> getLegalMoves(int row, int col) {
+    private ArrayList<int[]> getLegalMoves(ArrayList<Integer> board, int row, int col) {
         ArrayList<int[]> moves = new ArrayList<>();
         int[][] directions = {
             {-1, 0}, {1, 0}, {0, -1}, {0, 1},   // up, down, left, right
@@ -110,7 +130,7 @@ public class COSC322Test extends GamePlayer {
             int r = row + dir[0];
             int c = col + dir[1];
             while (r >= 1 && r <= 10 && c >= 1 && c <= 10) {
-                if (gameBoard.get(r * 11 + c) == 0) {
+                if (board.get(r * 11 + c) == 0) {
                     moves.add(new int[]{r, c});
                     r += dir[0];
                     c += dir[1];
@@ -122,64 +142,33 @@ public class COSC322Test extends GamePlayer {
         return moves;
     }
 
-    private void makeRandomMove() {
-        ArrayList<int[]> myQueens = getQueenPositions(myColor);
-        
-        // shuffle queens so we pick randomly
-        java.util.Collections.shuffle(myQueens);
-        
-        for (int[] queen : myQueens) {
-            ArrayList<int[]> moves = getLegalMoves(queen[0], queen[1]);
-            if (moves.isEmpty()) continue;
-            
-            // pick random move
-            int[] newPos = moves.get((int)(Math.random() * moves.size()));
-            
-            // temporarily move queen to find legal arrow shots
-            int from = queen[0] * 11 + queen[1];
-            int to = newPos[0] * 11 + newPos[1];
-            gameBoard.set(from, 0);
-            gameBoard.set(to, myColor);
-            
-            ArrayList<int[]> arrows = getLegalMoves(newPos[0], newPos[1]);
-            
-            // undo temporary move
-            gameBoard.set(from, myColor);
-            gameBoard.set(to, 0);
-            
-            if (arrows.isEmpty()) continue;
-            
-            // pick random arrow
-            int[] arrowPos = arrows.get((int)(Math.random() * arrows.size()));
-            
-            // build arraylists for sendMoveMessage
-            ArrayList<Integer> qCurr = new ArrayList<>();
-            qCurr.add(queen[0]); qCurr.add(queen[1]);
-            
-            ArrayList<Integer> qNext = new ArrayList<>();
-            qNext.add(newPos[0]); qNext.add(newPos[1]);
-            
-            ArrayList<Integer> arrow = new ArrayList<>();
-            arrow.add(arrowPos[0]); arrow.add(arrowPos[1]);
-            
-            // update our board with final move
-            gameBoard.set(from, 0);
-            gameBoard.set(to, myColor);
-            gameBoard.set(arrowPos[0] * 11 + arrowPos[1], 3);
-            
-            gameClient.sendMoveMessage(qCurr, qNext, arrow);
-            System.out.println("Sent move: " + queen[0] + "," + queen[1] + " -> " + newPos[0] + "," + newPos[1] + " arrow: " + arrowPos[0] + "," + arrowPos[1]);
-            return;
-        }
-    
-     System.out.println("No legal moves available - I lose");
+    private void sendMove(Move m) {
+        ArrayList<Integer> qCurr = new ArrayList<>();
+        qCurr.add(m.fr); qCurr.add(m.fc);
+
+        ArrayList<Integer> qNext = new ArrayList<>();
+        qNext.add(m.tr); qNext.add(m.tc);
+
+        ArrayList<Integer> arrow = new ArrayList<>();
+        arrow.add(m.ar); arrow.add(m.ac);
+
+        int from = m.fr * 11 + m.fc;
+        int to = m.tr * 11 + m.tc;
+        int arr = m.ar * 11 + m.ac;
+
+        gameBoard.set(from, 0);
+        gameBoard.set(to, myColor);
+        gameBoard.set(arr, 3);
+
+        gameClient.sendMoveMessage(qCurr, qNext, arrow);
+        System.out.println("Sent move: " + m);
     }
 
-    private ArrayList<int[]> getQueenPositions(int color) {
+    private ArrayList<int[]> getQueenPositions(ArrayList<Integer> board,int color) {
         ArrayList<int[]> queens = new ArrayList<>();
         for (int row = 1; row <= 10; row++) {
             for (int col = 1; col <= 10; col++) {
-                if (gameBoard.get(row * 11 + col) == color) {
+                if (board.get(row * 11 + col) == color) {
                     queens.add(new int[]{row, col});
                 }
             }
@@ -206,4 +195,52 @@ public class COSC322Test extends GamePlayer {
     public void connect() {
         gameClient = new GameClient(userName, passwd, this);
     }
+
+    private static class Move {
+        final int fr, fc, tr, tc, ar, ac;
+        Move(int fr, int fc, int tr, int tc, int ar, int ac) {
+            this.fr = fr; this.fc = fc;
+            this.tr = tr; this.tc = tc;
+            this.ar = ar; this.ac = ac;
+        }
+        @Override
+        public String toString() {
+            return "(" + fr + "," + fc + ") -> (" + tr + "," + tc + ") arrow (" + ar + "," + ac + ")";
+        }
+    }
+
+    private class AIPlayer {
+        Move chooseMove(ArrayList<Integer> board, int myColor) {
+
+            ArrayList<int[]> myQueens = getQueenPositions(board, myColor);
+            java.util.Collections.shuffle(myQueens);
+
+            for (int[] queen : myQueens) {
+                ArrayList<int[]> moves = getLegalMoves(board,queen[0], queen[1]);
+                if (moves.isEmpty()) continue;
+
+                int[] newPos = moves.get((int)(Math.random() * moves.size()));
+
+                int from = queen[0] * 11 + queen[1];
+                int to = newPos[0] * 11 + newPos[1];
+
+                board.set(from, 0);
+                board.set(to, myColor);
+
+                ArrayList<int[]> arrows = getLegalMoves(board, newPos[0], newPos[1]);
+
+                board.set(from, myColor);
+                board.set(to, 0);
+
+                if (arrows.isEmpty()) continue;
+
+                int[] arrowPos = arrows.get((int)(Math.random() * arrows.size()));
+
+                return new Move(queen[0], queen[1], newPos[0], newPos[1], arrowPos[0], arrowPos[1]);
+            }
+
+            return null;
+        }
+    }
+    // next to add: iterative deepening, ai pruning 
 }
