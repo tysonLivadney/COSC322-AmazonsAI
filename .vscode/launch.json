@@ -10,9 +10,23 @@
         },
         {
             "type": "java",
+            "name": "Player 1",
+            "request": "launch",
+            "mainClass": "ubc.cosc322.COSC322Test",
+            "args": ["player1", "cosc322"]
+        },
+        {
+            "type": "java",
+            "name": "Player 2",
+            "request": "launch",
+            "mainClass": "ubc.cosc322.COSC322Test",
+            "args": ["player2", "cosc322"]
+        },
+        {
+            "type": "java",
             "name": "HumanPlayer",
             "request": "launch",
             "mainClass": "ygraph.ai.smartfox.games.amazons.HumanPlayer"
-        },
+        }
     ]
 }

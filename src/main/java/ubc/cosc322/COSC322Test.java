@@ -21,9 +21,27 @@ public class COSC322Test extends GamePlayer {
     private String userName = null;
     private String passwd = null;
 
+    /**
+     * Convert display coordinates (1,1 = bottom-left) to board array index.
+     * Board is 11 columns wide (0-10), where column 0 is unused.
+     */
+    private int coordToIndex(int row, int col) {
+        int internalRow = 11 - row;  // flip row: 1->10, 10->1
+        return internalRow * 11 + col;
+    }
+
+    /**
+     * Convert board array index to display coordinates (1,1 = bottom-left).
+     */
+    private int[] indexToCoord(int index) {
+        int internalRow = index / 11;
+        int col = index % 11;
+        int row = 11 - internalRow;  // flip back: 10->1, 1->10
+        return new int[]{row, col};
+    }
+
     public static void main(String[] args) {
         COSC322Test player = new COSC322Test(args[0], "cosc322");
-        player.connect();
 
         if (player.getGameGUI() == null) {
             player.Go();
@@ -44,11 +62,43 @@ public class COSC322Test extends GamePlayer {
     }
 
     @Override
-    public void onLogin() {
-        if (gamegui != null) {
-            gamegui.setRoomInformation(gameClient.getRoomList());
-        }
+public void onLogin() {
+    System.out.println("Logged in as: " + userName);  // is this printing?
+    if (gamegui != null) {
+        gamegui.setRoomInformation(gameClient.getRoomList());
+        System.out.println("Rooms: " + gameClient.getRoomList());
     }
+}
+
+private void printBoard(ArrayList<Integer> board) {
+    if (board == null) {
+        System.out.println("Board is null");
+        return;
+    }
+
+    System.out.println("    1 2 3 4 5 6 7 8 9 10");
+
+    // Print from row 10 (top) to row 1 (bottom) - (1,1) is bottom-left
+    for (int row = 10; row >= 1; row--) {
+        if (row < 10) System.out.print(" " + row + "  ");
+        else System.out.print(row + "  ");
+
+        for (int col = 1; col <= 10; col++) {
+            int val = board.get(row * 11 + col);
+
+            char c;
+            if (val == 0) c = '.';   // empty
+            else if (val == 1) c = 'W'; // white
+            else if (val == 2) c = 'B'; // black
+            else if (val == 3) c = 'X'; // arrow
+            else c = '?'; // unexpected
+
+            System.out.print(c + " ");
+        }
+        System.out.println();
+    }
+    System.out.println("--------------------------");
+}
 
     @SuppressWarnings("unchecked")
     @Override
@@ -74,11 +124,10 @@ public class COSC322Test extends GamePlayer {
             }
             System.out.println("My color: " + (myColor == 2 ? "Black" : "White"));
             if (myColor == 1 && gameBoard != null) {
-            if (ai == null) ai = new AIPlayer();
-            Move myMove = ai.chooseMove(gameBoard, myColor);
-            if (myMove != null) sendMove(myMove);
+                if (ai == null) ai = new AIPlayer(); 
+                Move myMove = ai.chooseMove(cloneBoard(gameBoard), myColor);
+                if (myMove != null) sendMove(myMove);
             }
-
         } else if (messageType.equals(GameMessage.GAME_ACTION_MOVE)) {
             gamegui.updateGameState(msgDetails);
 
@@ -93,21 +142,17 @@ public class COSC322Test extends GamePlayer {
 
             int piece = gameBoard.get(from);
             lastMoverColor = piece;
-
             gameBoard.set(from, 0);
             gameBoard.set(to, piece);
             gameBoard.set(arrow, 3);
 
-            if(piece != myColor){
-                if (ai == null) {
-                    ai = new AIPlayer();
-                }
-                Move myMove = ai.chooseMove(gameBoard, myColor);
-                if (myMove != null){
-                     sendMove(myMove);
-                }
-                else System.out.println("No legal moves available - I lose");
+            if (ai == null) {
+                ai = new AIPlayer();
             }
+            Move myMove = ai.chooseMove(cloneBoard(gameBoard), myColor);
+            if (myMove != null) {
+                sendMove(myMove);
+            } else System.out.println("No legal moves available - I lose");
 
             // find and print my queens
             ArrayList<int[]> myQueens = getQueenPositions(gameBoard, myColor);
@@ -115,7 +160,7 @@ public class COSC322Test extends GamePlayer {
                 System.out.println("My queen at: " + q[0] + ", " + q[1]);
             }
         }
-
+        printBoard(gameBoard);
         return true;
     }
 
@@ -145,20 +190,15 @@ public class COSC322Test extends GamePlayer {
     private void sendMove(Move m) {
         ArrayList<Integer> qCurr = new ArrayList<>();
         qCurr.add(m.fr); qCurr.add(m.fc);
-
         ArrayList<Integer> qNext = new ArrayList<>();
         qNext.add(m.tr); qNext.add(m.tc);
-
         ArrayList<Integer> arrow = new ArrayList<>();
         arrow.add(m.ar); arrow.add(m.ac);
 
-        int from = m.fr * 11 + m.fc;
-        int to = m.tr * 11 + m.tc;
-        int arr = m.ar * 11 + m.ac;
-
-        gameBoard.set(from, 0);
-        gameBoard.set(to, myColor);
-        gameBoard.set(arr, 3);
+        // apply our move to the board here (and only here)
+        gameBoard.set(m.fr * 11 + m.fc, 0);
+        gameBoard.set(m.tr * 11 + m.tc, myColor);
+        gameBoard.set(m.ar * 11 + m.ac, 3);
 
         gameClient.sendMoveMessage(qCurr, qNext, arrow);
         System.out.println("Sent move: " + m);
@@ -174,6 +214,10 @@ public class COSC322Test extends GamePlayer {
             }
         }
         return queens;
+    }
+
+    private ArrayList<Integer> cloneBoard(ArrayList<Integer> board) {
+        return new ArrayList<>(board);
     }
 
     @Override
@@ -210,36 +254,120 @@ public class COSC322Test extends GamePlayer {
     }
 
     private class AIPlayer {
-        Move chooseMove(ArrayList<Integer> board, int myColor) {
+        Move chooseMove(ArrayList<Integer> boardCopy, int myColor) { //call minimax with iterative deepening
+            Move bestMove = null;
+            long startTime = System.currentTimeMillis();
+            long timeLimit = startTime + 5000;
 
-            ArrayList<int[]> myQueens = getQueenPositions(board, myColor);
-            java.util.Collections.shuffle(myQueens);
+            System.out.println("Starting iterative deepening...");
+            for (int depth = 1; depth <= 10; depth++) {
+                if (System.currentTimeMillis() >= timeLimit) break;
+                Move candidate = minimaxRoot(boardCopy, depth, myColor, startTime, timeLimit);
+                if (candidate == null) break;
+                bestMove = candidate;
+                System.out.println("Completed depth: " + depth);
+            }
+            System.out.println("Best move chosen: " + bestMove);
+            return bestMove;
+        }
 
-            for (int[] queen : myQueens) {
-                ArrayList<int[]> moves = getLegalMoves(board,queen[0], queen[1]);
-                if (moves.isEmpty()) continue;
+        private Move minimaxRoot(ArrayList<Integer> board, int depth, int myColor, long startTime, long timeLimit) {
+            if (System.currentTimeMillis() >= timeLimit) return null;
 
-                int[] newPos = moves.get((int)(Math.random() * moves.size()));
+            int opponent = (myColor == 1) ? 2 : 1;
+            Move bestMove = null;
+            int bestScore = Integer.MIN_VALUE;
 
-                int from = queen[0] * 11 + queen[1];
-                int to = newPos[0] * 11 + newPos[1];
+            for (int[] queen : getQueenPositions(board, myColor)) {
+                for (int[] newPos : getLegalMoves(board, queen[0], queen[1])) {
+                    int from = queen[0] * 11 + queen[1];
+                    int to = newPos[0] * 11 + newPos[1];
+                    board.set(from, 0);
+                    board.set(to, myColor);
 
-                board.set(from, 0);
-                board.set(to, myColor);
+                    for (int[] arrow : getLegalMoves(board, newPos[0], newPos[1])) {
+                        int arr = arrow[0] * 11 + arrow[1];
+                        board.set(arr, 3);
 
-                ArrayList<int[]> arrows = getLegalMoves(board, newPos[0], newPos[1]);
+                        int score = minimax(board, depth - 1, false, myColor, opponent, Integer.MIN_VALUE, Integer.MAX_VALUE, startTime, timeLimit);
 
-                board.set(from, myColor);
-                board.set(to, 0);
+                        board.set(arr, 0); 
+                        if (score > bestScore) {
+                            bestScore = score;
+                            bestMove = new Move(queen[0], queen[1], newPos[0], newPos[1], arrow[0], arrow[1]);
+                        }
+                    }
 
-                if (arrows.isEmpty()) continue;
+                    board.set(to, 0); // undo move
+                    board.set(from, myColor);
+                }
+            }
+            return bestMove;
+        }
 
-                int[] arrowPos = arrows.get((int)(Math.random() * arrows.size()));
+        private int minimax(ArrayList<Integer> board, int depth, boolean isMaximizing, int myColor, int opponent, int alpha, int beta, long startTime, long timeLimit) {
+            if (System.currentTimeMillis() > timeLimit) return 0; // will choose best move from previous level, return 0
 
-                return new Move(queen[0], queen[1], newPos[0], newPos[1], arrowPos[0], arrowPos[1]);
+            if (depth == 0) return evaluate(board, myColor); //base case: evaluate board
+
+
+            int current = isMaximizing ? myColor : opponent;
+            int best = isMaximizing ? Integer.MIN_VALUE : Integer.MAX_VALUE;
+            int score;
+
+            for (int[] queen : getQueenPositions(board, current)) {
+                for (int[] newPos : getLegalMoves(board, queen[0], queen[1])) {
+                    int from = queen[0] * 11 + queen[1];
+                    int to   = newPos[0] * 11 + newPos[1];
+                    board.set(from, 0);
+                    board.set(to, current);
+
+                    for (int[] arrow : getLegalMoves(board, newPos[0], newPos[1])) {
+                        int arr = arrow[0] * 11 + arrow[1];
+                        board.set(arr, 3);
+
+                        score = minimax(board, depth - 1, !isMaximizing, myColor, opponent, alpha, beta, startTime, timeLimit);
+
+                        if (isMaximizing) {
+                            best = Math.max(best, score);
+                            alpha = Math.max(alpha, best);
+                        } else {
+                            best = Math.min(best, score);
+                            beta = Math.min(beta, best);
+                        }
+
+                        if (beta <= alpha) {
+                            board.set(arr, 0);
+                            return best;
+                        }
+
+                        board.set(arr, 0);
+                    }
+
+                    board.set(to, 0);
+                    board.set(from, current);
+                }
             }
 
-            return null;
+            // no moves = loss
+            if (best == Integer.MIN_VALUE || best == Integer.MAX_VALUE) {
+                return isMaximizing ? -1000 : 1000;
+            }
+            return best;
+        }
+        private int evaluate(ArrayList<Integer> board, int myColor) {
+            int opponent = (myColor == 1) ? 2 : 1;
+            int myMoves = countTotalMoves(board, myColor);
+            int opMoves = countTotalMoves(board, opponent);
+            return myMoves - opMoves;
+        }
+
+        private int countTotalMoves(ArrayList<Integer> board, int color) {
+            int count = 0;
+            for (int[] queen : getQueenPositions(board, color)) {
+                count += getLegalMoves(board, queen[0], queen[1]).size();
+            }
+            return count;
         }
     }
     // next to add: iterative deepening, ai pruning 
