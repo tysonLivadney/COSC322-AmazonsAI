@@ -55,44 +55,37 @@ public class COSC322Test extends GamePlayer {
         if (gamegui == null) return false;
 
         if (messageType.equals(GameMessage.GAME_STATE_BOARD)) {
-            // Clone immediately — do NOT hold a direct reference to the server's list.
-            // Mutating the server's list corrupts the GUI and causes it to diverge.
             ArrayList<Integer> serverBoard = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.GAME_STATE);
-            gameBoard = new ArrayList<>(serverBoard);  // our private copy to mutate
-            gamegui.setGameState(serverBoard);          // GUI gets the original reference it expects
+            gameBoard = new ArrayList<>(serverBoard);
+            gamegui.setGameState(serverBoard);
             System.out.println("Board initialized. Size=" + gameBoard.size());
             printBoard(gameBoard);
 
         } else if (messageType.equals(GameMessage.GAME_ACTION_START)) {
-            // Determine my color
             String blackPlayer = (String) msgDetails.get(AmazonsGameMessage.PLAYER_BLACK);
             String whitePlayer = (String) msgDetails.get(AmazonsGameMessage.PLAYER_WHITE);
             System.out.println("Black: " + blackPlayer);
             System.out.println("White: " + whitePlayer);
             System.out.println("I am: " + userName);
 
-            // Explicitly check both names — default to spectator if neither matches
             if (userName.equals(blackPlayer)) {
                 myColor = 2;
             } else if (userName.equals(whitePlayer)) {
                 myColor = 1;
             } else {
-                myColor = 0; // spectator — will not send moves
+                myColor = 0;
                 System.out.println("Not a player in this game — spectating only.");
             }
             System.out.println("My color: " + (myColor == 1 ? "White" : myColor == 2 ? "Black" : "Spectator"));
 
-            // White moves first
             if (myColor == 1) {
                 System.out.println("I am White — making first move.");
                 makeAndSendMove();
             }
 
         } else if (messageType.equals(GameMessage.GAME_ACTION_MOVE)) {
-            // Update GUI first
             gamegui.updateGameState(msgDetails);
 
-            // Extract move details (server format: [row, col] in each list)
             ArrayList<Integer> queenCurr = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.QUEEN_POS_CURR);
             ArrayList<Integer> queenNext = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.QUEEN_POS_NEXT);
             ArrayList<Integer> arrowPos  = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.ARROW_POS);
@@ -113,25 +106,18 @@ public class COSC322Test extends GamePlayer {
                 + " board[arrow]=" + gameBoard.get(arrowIdx)
                 + "  myColor=" + myColor);
 
-            // Read who is at the source BEFORE touching the board.
-            // If it reads 0 that means we already applied our own move — treat as echo.
             int movingPiece = gameBoard.get(fromIdx);
 
             if (movingPiece == 0) {
-                // Source already empty = echo of our own move
                 System.out.println("Source square already empty — echo of our own move. Ignoring.");
             } else if (movingPiece != 1 && movingPiece != 2) {
-                // Piece value is not a queen (e.g. 3 = arrow) — board is desynced, skip
                 System.out.println("WARNING: unexpected piece value " + movingPiece + " at source — skipping.");
             } else {
-                // Valid queen move — apply to internal board
                 gameBoard.set(fromIdx, 0);
                 gameBoard.set(toIdx, movingPiece);
                 gameBoard.set(arrowIdx, 3);
-
                 printBoard(gameBoard);
 
-                // Only respond if it was the opponent's queen that moved, and we have a color
                 if (myColor != 0 && movingPiece != myColor) {
                     System.out.println("Opponent (" + movingPiece + ") moved. My turn.");
                     makeAndSendMove();
@@ -141,21 +127,9 @@ public class COSC322Test extends GamePlayer {
                     System.out.println("WARNING: received move for my own piece but board wasn't pre-applied.");
                 }
             }
-        } else if (messageType.equals(GameMessage.GAME_ACTION_END)) {
-            String winner = (String) msgDetails.get("winner");
-            if (winner != null) {
-                if (winner.equals(userName)) {
-                    System.out.println("==========================");
-                    System.out.println("GAME OVER — I WON! (" + userName + ")");
-                    System.out.println("==========================");
-                } else {
-                    System.out.println("==========================");
-                    System.out.println("GAME OVER — I LOST. Winner: " + winner);
-                    System.out.println("==========================");
-                }
-            } else {
-                System.out.println("GAME OVER — " + msgDetails);
-            }
+
+        } else {
+            System.out.println("Unhandled message type: " + messageType);
         }
 
         return true;
@@ -173,7 +147,9 @@ public class COSC322Test extends GamePlayer {
         Move myMove = ai.chooseMove(cloneBoard(gameBoard), myColor);
 
         if (myMove == null) {
-            System.out.println("No legal moves available — I lose.");
+            System.out.println("==========================");
+            System.out.println("No legal moves — I LOST.");
+            System.out.println("==========================");
             return;
         }
 
