@@ -15,30 +15,10 @@ public class COSC322Test extends GamePlayer {
     private BaseGameGUI gamegui = null;
     private ArrayList<Integer> gameBoard = null;
     private int myColor = 0; // 1 = white, 2 = black
-    private int lastMoverColor = 0;
-    private AIPlayer ai;
+    private AIPlayer ai = new AIPlayer();
 
     private String userName = null;
     private String passwd = null;
-
-    /**
-     * Convert display coordinates (1,1 = bottom-left) to board array index.
-     * Board is 11 columns wide (0-10), where column 0 is unused.
-     */
-    private int coordToIndex(int row, int col) {
-        int internalRow = 11 - row;  // flip row: 1->10, 10->1
-        return internalRow * 11 + col;
-    }
-
-    /**
-     * Convert board array index to display coordinates (1,1 = bottom-left).
-     */
-    private int[] indexToCoord(int index) {
-        int internalRow = index / 11;
-        int col = index % 11;
-        int row = 11 - internalRow;  // flip back: 10->1, 1->10
-        return new int[]{row, col};
-    }
 
     public static void main(String[] args) {
         COSC322Test player = new COSC322Test(args[0], "cosc322");
@@ -62,43 +42,12 @@ public class COSC322Test extends GamePlayer {
     }
 
     @Override
-public void onLogin() {
-    System.out.println("Logged in as: " + userName);  // is this printing?
-    if (gamegui != null) {
-        gamegui.setRoomInformation(gameClient.getRoomList());
-        System.out.println("Rooms: " + gameClient.getRoomList());
-    }
-}
-
-private void printBoard(ArrayList<Integer> board) {
-    if (board == null) {
-        System.out.println("Board is null");
-        return;
-    }
-
-    System.out.println("    1 2 3 4 5 6 7 8 9 10");
-
-    // Print from row 10 (top) to row 1 (bottom) - (1,1) is bottom-left
-    for (int row = 10; row >= 1; row--) {
-        if (row < 10) System.out.print(" " + row + "  ");
-        else System.out.print(row + "  ");
-
-        for (int col = 1; col <= 10; col++) {
-            int val = board.get(row * 11 + col);
-
-            char c;
-            if (val == 0) c = '.';   // empty
-            else if (val == 1) c = 'W'; // white
-            else if (val == 2) c = 'B'; // black
-            else if (val == 3) c = 'X'; // arrow
-            else c = '?'; // unexpected
-
-            System.out.print(c + " ");
+    public void onLogin() {
+        System.out.println("Logged in as: " + userName);
+        if (gamegui != null) {
+            gamegui.setRoomInformation(gameClient.getRoomList());
         }
-        System.out.println();
     }
-    System.out.println("--------------------------");
-}
 
     @SuppressWarnings("unchecked")
     @Override
@@ -106,69 +55,223 @@ private void printBoard(ArrayList<Integer> board) {
         if (gamegui == null) return false;
 
         if (messageType.equals(GameMessage.GAME_STATE_BOARD)) {
-            gameBoard = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.GAME_STATE);
-            gamegui.setGameState(gameBoard);
-            if (ai == null) ai = new AIPlayer();
+            // Clone immediately — do NOT hold a direct reference to the server's list.
+            // Mutating the server's list corrupts the GUI and causes it to diverge.
+            ArrayList<Integer> serverBoard = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.GAME_STATE);
+            gameBoard = new ArrayList<>(serverBoard);  // our private copy to mutate
+            gamegui.setGameState(serverBoard);          // GUI gets the original reference it expects
+            System.out.println("Board initialized. Size=" + gameBoard.size());
+            printBoard(gameBoard);
 
         } else if (messageType.equals(GameMessage.GAME_ACTION_START)) {
+            // Determine my color
             String blackPlayer = (String) msgDetails.get(AmazonsGameMessage.PLAYER_BLACK);
             String whitePlayer = (String) msgDetails.get(AmazonsGameMessage.PLAYER_WHITE);
             System.out.println("Black: " + blackPlayer);
             System.out.println("White: " + whitePlayer);
             System.out.println("I am: " + userName);
 
+            // Explicitly check both names — default to spectator if neither matches
             if (userName.equals(blackPlayer)) {
                 myColor = 2;
-            } else {
+            } else if (userName.equals(whitePlayer)) {
                 myColor = 1;
+            } else {
+                myColor = 0; // spectator — will not send moves
+                System.out.println("Not a player in this game — spectating only.");
             }
-            System.out.println("My color: " + (myColor == 2 ? "Black" : "White"));
-            if (myColor == 1 && gameBoard != null) {
-                if (ai == null) ai = new AIPlayer(); 
-                Move myMove = ai.chooseMove(cloneBoard(gameBoard), myColor);
-                if (myMove != null) sendMove(myMove);
+            System.out.println("My color: " + (myColor == 1 ? "White" : myColor == 2 ? "Black" : "Spectator"));
+
+            // White moves first
+            if (myColor == 1) {
+                System.out.println("I am White — making first move.");
+                makeAndSendMove();
             }
+
         } else if (messageType.equals(GameMessage.GAME_ACTION_MOVE)) {
+            // Update GUI first
             gamegui.updateGameState(msgDetails);
 
-            // update internal board
+            // Extract move details (server format: [row, col] in each list)
             ArrayList<Integer> queenCurr = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.QUEEN_POS_CURR);
             ArrayList<Integer> queenNext = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.QUEEN_POS_NEXT);
-            ArrayList<Integer> arrowPos = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.ARROW_POS);
+            ArrayList<Integer> arrowPos  = (ArrayList<Integer>) msgDetails.get(AmazonsGameMessage.ARROW_POS);
 
-            int from = queenCurr.get(0) * 11 + queenCurr.get(1);
-            int to = queenNext.get(0) * 11 + queenNext.get(1);
-            int arrow = arrowPos.get(0) * 11 + arrowPos.get(1);
+            int fromRow = queenCurr.get(0), fromCol = queenCurr.get(1);
+            int toRow   = queenNext.get(0), toCol   = queenNext.get(1);
+            int arrRow  = arrowPos.get(0),  arrCol  = arrowPos.get(1);
 
-            int piece = gameBoard.get(from);
-            lastMoverColor = piece;
-            gameBoard.set(from, 0);
-            gameBoard.set(to, piece);
-            gameBoard.set(arrow, 3);
+            int fromIdx  = fromRow * 11 + fromCol;
+            int toIdx    = toRow   * 11 + toCol;
+            int arrowIdx = arrRow  * 11 + arrCol;
 
-            if (ai == null) {
-                ai = new AIPlayer();
+            System.out.println("MOVE MSG: from(" + fromRow + "," + fromCol + ")"
+                + " to(" + toRow + "," + toCol + ")"
+                + " arrow(" + arrRow + "," + arrCol + ")");
+            System.out.println("  board[from]=" + gameBoard.get(fromIdx)
+                + " board[to]=" + gameBoard.get(toIdx)
+                + " board[arrow]=" + gameBoard.get(arrowIdx)
+                + "  myColor=" + myColor);
+
+            // Read who is at the source BEFORE touching the board.
+            // If it reads 0 that means we already applied our own move — treat as echo.
+            int movingPiece = gameBoard.get(fromIdx);
+
+            if (movingPiece == 0) {
+                // Source already empty = echo of our own move
+                System.out.println("Source square already empty — echo of our own move. Ignoring.");
+            } else if (movingPiece != 1 && movingPiece != 2) {
+                // Piece value is not a queen (e.g. 3 = arrow) — board is desynced, skip
+                System.out.println("WARNING: unexpected piece value " + movingPiece + " at source — skipping.");
+            } else {
+                // Valid queen move — apply to internal board
+                gameBoard.set(fromIdx, 0);
+                gameBoard.set(toIdx, movingPiece);
+                gameBoard.set(arrowIdx, 3);
+
+                printBoard(gameBoard);
+
+                // Only respond if it was the opponent's queen that moved, and we have a color
+                if (myColor != 0 && movingPiece != myColor) {
+                    System.out.println("Opponent (" + movingPiece + ") moved. My turn.");
+                    makeAndSendMove();
+                } else if (myColor == 0) {
+                    System.out.println("Spectating — not sending a move.");
+                } else {
+                    System.out.println("WARNING: received move for my own piece but board wasn't pre-applied.");
+                }
             }
-            Move myMove = ai.chooseMove(cloneBoard(gameBoard), myColor);
-            if (myMove != null) {
-                sendMove(myMove);
-            } else System.out.println("No legal moves available - I lose");
-
-            // find and print my queens
-            ArrayList<int[]> myQueens = getQueenPositions(gameBoard, myColor);
-            for (int[] q : myQueens) {
-                System.out.println("My queen at: " + q[0] + ", " + q[1]);
+        } else if (messageType.equals(GameMessage.GAME_ACTION_END)) {
+            String winner = (String) msgDetails.get("winner");
+            if (winner != null) {
+                if (winner.equals(userName)) {
+                    System.out.println("==========================");
+                    System.out.println("GAME OVER — I WON! (" + userName + ")");
+                    System.out.println("==========================");
+                } else {
+                    System.out.println("==========================");
+                    System.out.println("GAME OVER — I LOST. Winner: " + winner);
+                    System.out.println("==========================");
+                }
+            } else {
+                System.out.println("GAME OVER — " + msgDetails);
             }
         }
-        printBoard(gameBoard);
+
         return true;
     }
 
+    /**
+     * Ask the AI for a move, apply it to our board, and send it to the server.
+     */
+    private void makeAndSendMove() {
+        if (gameBoard == null) {
+            System.out.println("ERROR: gameBoard is null, cannot move.");
+            return;
+        }
+
+        Move myMove = ai.chooseMove(cloneBoard(gameBoard), myColor);
+
+        if (myMove == null) {
+            System.out.println("No legal moves available — I lose.");
+            return;
+        }
+
+        // Snapshot board BEFORE we apply the move, so we can validate against it
+        ArrayList<Integer> boardBeforeMove = cloneBoard(gameBoard);
+
+        // Apply move to our own board
+        gameBoard.set(myMove.fr * 11 + myMove.fc, 0);
+        gameBoard.set(myMove.tr * 11 + myMove.tc, myColor);
+        gameBoard.set(myMove.ar * 11 + myMove.ac, 3);
+
+        // Send to server
+        ArrayList<Integer> qCurr = new ArrayList<>();
+        qCurr.add(myMove.fr);
+        qCurr.add(myMove.fc);
+
+        ArrayList<Integer> qNext = new ArrayList<>();
+        qNext.add(myMove.tr);
+        qNext.add(myMove.tc);
+
+        ArrayList<Integer> arrow = new ArrayList<>();
+        arrow.add(myMove.ar);
+        arrow.add(myMove.ac);
+
+        validateMove(myMove, boardBeforeMove);
+        gameClient.sendMoveMessage(qCurr, qNext, arrow);
+        System.out.println("Sent move: " + myMove);
+        printBoard(gameBoard);
+    }
+
+    // -----------------------------------------------------------------------
+    // Board helpers
+    // -----------------------------------------------------------------------
+
+    /**
+     * Validates a move against the board state BEFORE the move was applied.
+     * Logs exactly which constraint is violated, if any.
+     */
+    private void validateMove(Move m, ArrayList<Integer> board) {
+        int piece = board.get(m.fr * 11 + m.fc);
+
+        // 1. Is there our piece at the source?
+        if (piece != myColor) {
+            System.out.println("INVALID MOVE: no " + myColor + " at source (" + m.fr + "," + m.fc + "), found " + piece);
+            return;
+        }
+
+        // 2. Is the queen path clear (no jumping)?
+        if (!isQueenPathClear(board, m.fr, m.fc, m.tr, m.tc)) {
+            System.out.println("INVALID MOVE: queen path blocked from (" + m.fr + "," + m.fc + ") to (" + m.tr + "," + m.tc + ")");
+            return;
+        }
+
+        // 3. Simulate queen move, then check arrow path
+        ArrayList<Integer> afterQueenMove = cloneBoard(board);
+        afterQueenMove.set(m.fr * 11 + m.fc, 0);
+        afterQueenMove.set(m.tr * 11 + m.tc, myColor);
+
+        if (!isQueenPathClear(afterQueenMove, m.tr, m.tc, m.ar, m.ac)) {
+            System.out.println("INVALID MOVE: arrow path blocked from (" + m.tr + "," + m.tc + ") to (" + m.ar + "," + m.ac + ")");
+            return;
+        }
+
+        System.out.println("Move validated OK.");
+    }
+
+    /**
+     * Returns true if a queen can move from (r1,c1) to (r2,c2) on the given board —
+     * i.e. same row/col/diagonal, and all squares in between are empty.
+     */
+    private boolean isQueenPathClear(ArrayList<Integer> board, int r1, int c1, int r2, int c2) {
+        int dr = Integer.signum(r2 - r1);
+        int dc = Integer.signum(c2 - c1);
+
+        // Must be in a straight line (row, col, or diagonal)
+        if (dr == 0 && dc == 0) return false; // same square
+        if (dr != 0 && dc != 0 && Math.abs(r2 - r1) != Math.abs(c2 - c1)) return false; // not diagonal
+
+        int r = r1 + dr;
+        int c = c1 + dc;
+        while (r != r2 || c != c2) {
+            if (board.get(r * 11 + c) != 0) return false; // blocked
+            r += dr;
+            c += dc;
+        }
+        // destination itself must be empty
+        return board.get(r2 * 11 + c2) == 0;
+    }
+
+    /**
+     * Return all squares reachable in queen-moves from (row, col) on board.
+     * Board is 11-wide (column 0 unused); valid squares are rows/cols 1..10.
+     */
     private ArrayList<int[]> getLegalMoves(ArrayList<Integer> board, int row, int col) {
         ArrayList<int[]> moves = new ArrayList<>();
         int[][] directions = {
-            {-1, 0}, {1, 0}, {0, -1}, {0, 1},   // up, down, left, right
-            {-1, -1}, {-1, 1}, {1, -1}, {1, 1}   // diagonals
+            {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+            {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
         };
 
         for (int[] dir : directions) {
@@ -187,24 +290,7 @@ private void printBoard(ArrayList<Integer> board) {
         return moves;
     }
 
-    private void sendMove(Move m) {
-        ArrayList<Integer> qCurr = new ArrayList<>();
-        qCurr.add(m.fr); qCurr.add(m.fc);
-        ArrayList<Integer> qNext = new ArrayList<>();
-        qNext.add(m.tr); qNext.add(m.tc);
-        ArrayList<Integer> arrow = new ArrayList<>();
-        arrow.add(m.ar); arrow.add(m.ac);
-
-        // apply our move to the board here (and only here)
-        gameBoard.set(m.fr * 11 + m.fc, 0);
-        gameBoard.set(m.tr * 11 + m.tc, myColor);
-        gameBoard.set(m.ar * 11 + m.ac, 3);
-
-        gameClient.sendMoveMessage(qCurr, qNext, arrow);
-        System.out.println("Sent move: " + m);
-    }
-
-    private ArrayList<int[]> getQueenPositions(ArrayList<Integer> board,int color) {
+    private ArrayList<int[]> getQueenPositions(ArrayList<Integer> board, int color) {
         ArrayList<int[]> queens = new ArrayList<>();
         for (int row = 1; row <= 10; row++) {
             for (int col = 1; col <= 10; col++) {
@@ -220,101 +306,131 @@ private void printBoard(ArrayList<Integer> board) {
         return new ArrayList<>(board);
     }
 
-    @Override
-    public String userName() {
-        return userName;
+    private void printBoard(ArrayList<Integer> board) {
+        if (board == null) { System.out.println("Board is null"); return; }
+
+        System.out.println("    1 2 3 4 5 6 7 8 9 10");
+        for (int row = 10; row >= 1; row--) {
+            System.out.printf("%2d  ", row);
+            for (int col = 1; col <= 10; col++) {
+                int val = board.get(row * 11 + col);
+                // 1=Black, 2=White in the server's encoding (matches GUI display)
+                char c = val == 0 ? '.' : val == 1 ? 'B' : val == 2 ? 'W' : val == 3 ? 'X' : '?';
+                System.out.print(c + " ");
+            }
+            System.out.println();
+        }
+        System.out.println("--------------------------");
     }
 
-    @Override
-    public GameClient getGameClient() {
-        return this.gameClient;
-    }
+    // -----------------------------------------------------------------------
+    // GamePlayer interface
+    // -----------------------------------------------------------------------
 
     @Override
-    public BaseGameGUI getGameGUI() {
-        return this.gamegui;
-    }
+    public String userName() { return userName; }
+
+    @Override
+    public GameClient getGameClient() { return this.gameClient; }
+
+    @Override
+    public BaseGameGUI getGameGUI() { return this.gamegui; }
 
     @Override
     public void connect() {
         gameClient = new GameClient(userName, passwd, this);
     }
 
+    // -----------------------------------------------------------------------
+    // Move record
+    // -----------------------------------------------------------------------
+
     private static class Move {
         final int fr, fc, tr, tc, ar, ac;
+
         Move(int fr, int fc, int tr, int tc, int ar, int ac) {
             this.fr = fr; this.fc = fc;
             this.tr = tr; this.tc = tc;
             this.ar = ar; this.ac = ac;
         }
+
         @Override
         public String toString() {
             return "(" + fr + "," + fc + ") -> (" + tr + "," + tc + ") arrow (" + ar + "," + ac + ")";
         }
     }
 
+    // -----------------------------------------------------------------------
+    // AI — minimax with alpha-beta pruning + iterative deepening
+    // -----------------------------------------------------------------------
+
     private class AIPlayer {
-        Move chooseMove(ArrayList<Integer> boardCopy, int myColor) { //call minimax with iterative deepening
+
+        Move chooseMove(ArrayList<Integer> boardCopy, int color) {
             Move bestMove = null;
             long startTime = System.currentTimeMillis();
-            long timeLimit = startTime + 5000;
+            long timeLimit = startTime + 5000; // 5-second budget
 
-            System.out.println("Starting iterative deepening...");
             for (int depth = 1; depth <= 10; depth++) {
                 if (System.currentTimeMillis() >= timeLimit) break;
-                Move candidate = minimaxRoot(boardCopy, depth, myColor, startTime, timeLimit);
-                if (candidate == null) break;
+
+                Move candidate = minimaxRoot(boardCopy, depth, color, timeLimit);
+                if (candidate == null) break; // timed out before finishing depth 1
                 bestMove = candidate;
-                System.out.println("Completed depth: " + depth);
+                System.out.println("Completed depth " + depth + " — best so far: " + bestMove);
             }
-            System.out.println("Best move chosen: " + bestMove);
+
             return bestMove;
         }
 
-        private Move minimaxRoot(ArrayList<Integer> board, int depth, int myColor, long startTime, long timeLimit) {
-            if (System.currentTimeMillis() >= timeLimit) return null;
-
-            int opponent = (myColor == 1) ? 2 : 1;
+        private Move minimaxRoot(ArrayList<Integer> board, int depth, int color, long timeLimit) {
             Move bestMove = null;
             int bestScore = Integer.MIN_VALUE;
+            int opponent = (color == 1) ? 2 : 1;
 
-            for (int[] queen : getQueenPositions(board, myColor)) {
+            for (int[] queen : getQueenPositions(board, color)) {
                 for (int[] newPos : getLegalMoves(board, queen[0], queen[1])) {
+                    if (System.currentTimeMillis() >= timeLimit) return bestMove; // return best found so far
+
                     int from = queen[0] * 11 + queen[1];
-                    int to = newPos[0] * 11 + newPos[1];
+                    int to   = newPos[0] * 11 + newPos[1];
                     board.set(from, 0);
-                    board.set(to, myColor);
+                    board.set(to, color);
 
                     for (int[] arrow : getLegalMoves(board, newPos[0], newPos[1])) {
                         int arr = arrow[0] * 11 + arrow[1];
                         board.set(arr, 3);
 
-                        int score = minimax(board, depth - 1, false, myColor, opponent, Integer.MIN_VALUE, Integer.MAX_VALUE, startTime, timeLimit);
+                        int score = minimax(board, depth - 1, false, color, opponent,
+                                            Integer.MIN_VALUE, Integer.MAX_VALUE, timeLimit);
 
-                        board.set(arr, 0); 
+                        board.set(arr, 0);
+
                         if (score > bestScore) {
                             bestScore = score;
                             bestMove = new Move(queen[0], queen[1], newPos[0], newPos[1], arrow[0], arrow[1]);
                         }
                     }
 
-                    board.set(to, 0); // undo move
-                    board.set(from, myColor);
+                    board.set(to, 0);
+                    board.set(from, color);
                 }
             }
+
             return bestMove;
         }
 
-        private int minimax(ArrayList<Integer> board, int depth, boolean isMaximizing, int myColor, int opponent, int alpha, int beta, long startTime, long timeLimit) {
-            if (System.currentTimeMillis() > timeLimit) return 0; // will choose best move from previous level, return 0
+        private int minimax(ArrayList<Integer> board, int depth, boolean isMaximizing,
+                            int myColor, int opponent, int alpha, int beta, long timeLimit) {
 
-            if (depth == 0) return evaluate(board, myColor); //base case: evaluate board
-
+            if (System.currentTimeMillis() >= timeLimit) return evaluate(board, myColor);
+            if (depth == 0) return evaluate(board, myColor);
 
             int current = isMaximizing ? myColor : opponent;
+            boolean hadMove = false;
             int best = isMaximizing ? Integer.MIN_VALUE : Integer.MAX_VALUE;
-            int score;
 
+            outer:
             for (int[] queen : getQueenPositions(board, current)) {
                 for (int[] newPos : getLegalMoves(board, queen[0], queen[1])) {
                     int from = queen[0] * 11 + queen[1];
@@ -325,23 +441,26 @@ private void printBoard(ArrayList<Integer> board) {
                     for (int[] arrow : getLegalMoves(board, newPos[0], newPos[1])) {
                         int arr = arrow[0] * 11 + arrow[1];
                         board.set(arr, 3);
+                        hadMove = true;
 
-                        score = minimax(board, depth - 1, !isMaximizing, myColor, opponent, alpha, beta, startTime, timeLimit);
+                        int score = minimax(board, depth - 1, !isMaximizing,
+                                            myColor, opponent, alpha, beta, timeLimit);
+
+                        board.set(arr, 0);
 
                         if (isMaximizing) {
-                            best = Math.max(best, score);
-                            alpha = Math.max(alpha, best);
+                            if (score > best) best = score;
+                            if (best > alpha) alpha = best;
                         } else {
-                            best = Math.min(best, score);
-                            beta = Math.min(beta, best);
+                            if (score < best) best = score;
+                            if (best < beta) beta = best;
                         }
 
                         if (beta <= alpha) {
-                            board.set(arr, 0);
-                            return best;
+                            board.set(to, 0);
+                            board.set(from, current);
+                            break outer; // prune
                         }
-
-                        board.set(arr, 0);
                     }
 
                     board.set(to, 0);
@@ -349,17 +468,20 @@ private void printBoard(ArrayList<Integer> board) {
                 }
             }
 
-            // no moves = loss
-            if (best == Integer.MIN_VALUE || best == Integer.MAX_VALUE) {
-                return isMaximizing ? -1000 : 1000;
+            // No moves at all = that side has lost
+            if (!hadMove) {
+                return isMaximizing ? -10000 : 10000;
             }
+
             return best;
         }
+
+        /**
+         * Heuristic: difference in total queen-reachable squares (mobility).
+         */
         private int evaluate(ArrayList<Integer> board, int myColor) {
             int opponent = (myColor == 1) ? 2 : 1;
-            int myMoves = countTotalMoves(board, myColor);
-            int opMoves = countTotalMoves(board, opponent);
-            return myMoves - opMoves;
+            return countTotalMoves(board, myColor) - countTotalMoves(board, opponent);
         }
 
         private int countTotalMoves(ArrayList<Integer> board, int color) {
@@ -370,5 +492,4 @@ private void printBoard(ArrayList<Integer> board) {
             return count;
         }
     }
-    // next to add: iterative deepening, ai pruning 
 }
