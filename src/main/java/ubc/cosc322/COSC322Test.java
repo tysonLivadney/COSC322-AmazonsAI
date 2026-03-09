@@ -2,6 +2,8 @@ package ubc.cosc322;
 
 import java.util.Map;
 import java.util.ArrayList;
+import java.lang.reflect.Array;
+import java.util.ArrayDeque;
 
 import ygraph.ai.smartfox.games.amazons.AmazonsGameMessage;
 import ygraph.ai.smartfox.games.BaseGameGUI;
@@ -14,7 +16,7 @@ public class COSC322Test extends GamePlayer {
     private GameClient gameClient = null;
     private BaseGameGUI gamegui = null;
     private ArrayList<Integer> gameBoard = null;
-    private int myColor = 0; // 1 = white, 2 = black
+    private int myColor = 0; // 2 = white, 1 = black
     private AIPlayer ai = new AIPlayer();
 
     private String userName = null;
@@ -69,9 +71,9 @@ public class COSC322Test extends GamePlayer {
             System.out.println("I am: " + userName);
 
             if (userName.equals(blackPlayer)) {
-                myColor = 2;
-            } else if (userName.equals(whitePlayer)) {
                 myColor = 1;
+            } else if (userName.equals(whitePlayer)) {
+                myColor = 2;
             } else {
                 myColor = 0;
                 System.out.println("Not a player in this game — spectating only.");
@@ -345,7 +347,7 @@ public class COSC322Test extends GamePlayer {
         Move chooseMove(ArrayList<Integer> boardCopy, int color) {
             Move bestMove = null;
             long startTime = System.currentTimeMillis();
-            long timeLimit = startTime + 5000; // 5-second budget
+            long timeLimit = startTime + 30000; // 5-second budget
 
             for (int depth = 1; depth <= 10; depth++) {
                 if (System.currentTimeMillis() >= timeLimit) break;
@@ -457,7 +459,14 @@ public class COSC322Test extends GamePlayer {
          */
         private int evaluate(ArrayList<Integer> board, int myColor) {
             int opponent = (myColor == 1) ? 2 : 1;
-            return countTotalMoves(board, myColor) - countTotalMoves(board, opponent);
+
+            int myMobility = countTotalMoves(board, myColor);
+            int oppMobility = countTotalMoves(board, opponent);
+            int mobilityScore = myMobility - oppMobility;
+            int territoryScore = evaluateTerritory(board, myColor, opponent);
+            int trappedScore = countTrappedQueens(board, opponent) - countTrappedQueens(board, myColor);
+            int localFreedomScore = localFreedom(board, myColor) - localFreedom(board, opponent);
+            return 4 * mobilityScore+ 6 * territoryScore + 8 * trappedScore + 2 * localFreedomScore;
         }
 
         private int countTotalMoves(ArrayList<Integer> board, int color) {
@@ -466,6 +475,107 @@ public class COSC322Test extends GamePlayer {
                 count += getLegalMoves(board, queen[0], queen[1]).size();
             }
             return count;
+        }
+
+        private int countTrappedQueens(ArrayList<Integer> board, int color) {
+            int trapped = 0;
+            for (int[] queen : getQueenPositions(board, color)) {
+                int mobility = getLegalMoves(board, queen[0], queen[1]).size();
+
+                if (mobility <= 2) {
+                    trapped += 2;   // very trapped
+                } else if (mobility <= 5) {
+                    trapped += 1;   // somewhat trapped
+                }
+            }
+        return trapped;
+        }
+
+        private int localFreedom(ArrayList<Integer> board, int color) {
+            int freedom = 0;
+            int[][] dirs = {
+            {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+            {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+            };
+            for (int[] queen : getQueenPositions(board, color)) {
+                int r = queen[0];
+                int c = queen[1];
+
+                for (int[] d : dirs) {
+                    int nr = r + d[0];
+                    int nc = c + d[1];
+
+                    if (nr >= 1 && nr <= 10 && nc >= 1 && nc <= 10) {
+                        if (board.get(nr * 11 + nc) == 0) {
+                            freedom++;
+                        }
+                    }
+                }
+            }
+            return freedom;
+        }
+
+        private int evaluateTerritory(ArrayList<Integer> board, int myColor, int opponent) {
+            int[][] myDist = queenDistanceMap(board, myColor);
+            int[][] oppDist = queenDistanceMap(board, opponent);
+
+            int score = 0;
+
+            for (int row = 1; row <= 10; row++) {
+                for (int col = 1; col <= 10; col++) {
+                    if (board.get(row * 11 + col) != 0) continue; // only score empty squares
+
+                    int md = myDist[row][col];
+                    int od = oppDist[row][col];
+
+                    if (md == Integer.MAX_VALUE && od == Integer.MAX_VALUE) {
+                        continue;
+                    } else if (md < od) {
+                        score += 1;
+                    } else if (od < md) {
+                        score -= 1;
+                    }
+                    // tie = 0
+                }
+            }
+
+            return score;
+        }
+
+        private int[][] queenDistanceMap(ArrayList<Integer> board, int color) {
+            int[][] dist = new int[11][11];
+
+            for (int r = 0; r < 11; r++) {
+                for (int c = 0; c < 11; c++) {
+                    dist[r][c] = Integer.MAX_VALUE;
+                }
+            }
+
+            ArrayDeque<int[]> queue = new ArrayDeque<>();
+
+            for (int[] queen : getQueenPositions(board, color)) {
+                dist[queen[0]][queen[1]] = 0;
+                queue.add(new int[]{queen[0], queen[1]});
+            }
+
+            while (!queue.isEmpty()) {
+                int[] cur = queue.poll();
+                int row = cur[0];
+                int col = cur[1];
+                int nextDist = dist[row][col] + 1;
+
+                for (int[] move : getLegalMoves(board, row, col)) {
+                    int nr = move[0];
+                    int nc = move[1];
+
+                    if (dist[nr][nc] > nextDist) {
+                        dist[nr][nc] = nextDist;
+                        queue.add(new int[]{nr, nc});
+                    }
+                }
+            }
+
+            return dist;
         }
     }
 }
