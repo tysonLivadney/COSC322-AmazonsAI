@@ -24,9 +24,10 @@
         },
         {
             "type": "java",
-            "name": "HumanPlayer",
+            "name": "Player",
             "request": "launch",
             "mainClass": "ygraph.ai.smartfox.games.amazons.HumanPlayer"
         }
+
     ]
 }
