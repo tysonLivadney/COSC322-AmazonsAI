@@ -322,7 +322,6 @@ public class COSC322Test extends GamePlayer {
     // -----------------------------------------------------------------------
     // Move record
     // -----------------------------------------------------------------------
-
     private static class Move {
         final int fr, fc, tr, tc, ar, ac;
 
@@ -338,16 +337,25 @@ public class COSC322Test extends GamePlayer {
         }
     }
 
+
     // -----------------------------------------------------------------------
     // AI — minimax with alpha-beta pruning + iterative deepening
     // -----------------------------------------------------------------------
 
     private class AIPlayer {
 
+        private class ScoredMove extends Move {
+            int score;
+            ScoredMove(int fr, int fc, int tr, int tc, int ar, int ac, int score) {
+                super(fr, fc, tr, tc, ar, ac);
+                this.score = score;
+            }
+        }
+
         Move chooseMove(ArrayList<Integer> boardCopy, int color) {
             Move bestMove = null;
             long startTime = System.currentTimeMillis();
-            long timeLimit = startTime + 30000; // 5-second budget
+            long timeLimit = startTime + 30000; // 30-second budget
 
             for (int depth = 1; depth <= 10; depth++) {
                 if (System.currentTimeMillis() >= timeLimit) break;
@@ -361,37 +369,110 @@ public class COSC322Test extends GamePlayer {
             return bestMove;
         }
 
+        private void applyMove(ArrayList<Integer> board, Move m, int color) {
+            board.set(m.fr * 11 + m.fc, 0);
+            board.set(m.tr * 11 + m.tc, color);
+            board.set(m.ar * 11 + m.ac, 3);
+        }
+
+        private void undoMove(ArrayList<Integer> board, Move m, int color) {
+            board.set(m.fr * 11 + m.fc, color);
+            board.set(m.tr * 11 + m.tc, 0);
+            board.set(m.ar * 11 + m.ac, 0);
+        }
+
+        private int localFreedomAt(ArrayList<Integer> board, int r, int c) {
+            int freedom = 0;
+            int[][] dirs = {
+                {1, 0}, {-1, 0}, {0, 1}, {0, -1},
+                {1, 1}, {1, -1}, {-1, 1}, {-1, -1}
+            };
+            for (int[] d : dirs) {
+                int nr = r + d[0];
+                int nc = c + d[1];
+                if (nr >= 1 && nr <= 10 && nc >= 1 && nc <= 10) {
+                    if (board.get(nr * 11 + nc) == 0) {
+                        freedom++;
+                    }
+                }
+            }
+            return freedom;
+        }
+
+        private int quickMoveScore(ArrayList<Integer> board, int color, int tr, int tc, int ar, int ac) {
+            int opponent = (color == 1) ? 2 : 1;
+            int score = 0;
+            // Prefer destination squares with nearby freedom
+            score += 5 * localFreedomAt(board, tr, tc);
+            for (int[] q : getQueenPositions(board, opponent)) {
+                int dist = Math.max(Math.abs(ar - q[0]), Math.abs(ac - q[1]));
+                if (dist == 1) score += 30;
+                else if (dist == 2) score += 12;
+            }
+            // Prefer reducing opponent mobility
+            score -= countTotalMoves(board, opponent);
+            // Slight center preference
+            int centerPenalty = Math.abs(tr - 5) + Math.abs(tc - 5);
+            score -= centerPenalty;
+            // Reward trapping pressure
+            score += 20 * countTrappedQueens(board, opponent);
+            return score;
+        }
+
+        private ArrayList<ScoredMove> generateOrderedMoves(ArrayList<Integer> board, int color) {
+            ArrayList<ScoredMove> moves = new ArrayList<>();
+
+            for (int[] queen : getQueenPositions(board, color)) {
+                int fr = queen[0], fc = queen[1];
+                int from = fr * 11 + fc;
+                for (int[] newPos : getLegalMoves(board, fr, fc)) {
+                    int tr = newPos[0], tc = newPos[1];
+                    int to = tr * 11 + tc;
+                    board.set(from, 0);
+                    board.set(to, color);
+                    for (int[] arrow : getLegalMoves(board, tr, tc)) {
+                        int ar = arrow[0], ac = arrow[1];
+                        int arr = ar * 11 + ac;
+
+                        board.set(arr, 3);
+
+                        int score = quickMoveScore(board, color, tr, tc, ar, ac);
+
+                        board.set(arr, 0);
+
+                        moves.add(new ScoredMove(fr, fc, tr, tc, ar, ac, score));
+                    }
+                    board.set(to, 0);
+                    board.set(from, color);
+                }
+            }
+            moves.sort((a, b) -> Integer.compare(b.score, a.score));
+            return moves;
+        }
+
         private Move minimaxRoot(ArrayList<Integer> board, int depth, int color, long timeLimit) {
             Move bestMove = null;
             int bestScore = Integer.MIN_VALUE;
             int opponent = (color == 1) ? 2 : 1;
 
-            for (int[] queen : getQueenPositions(board, color)) {
-                for (int[] newPos : getLegalMoves(board, queen[0], queen[1])) {
-                    if (System.currentTimeMillis() >= timeLimit) return bestMove; // return best found so far
+            ArrayList<ScoredMove> moves = generateOrderedMoves(board, color);
 
-                    int from = queen[0] * 11 + queen[1];
-                    int to   = newPos[0] * 11 + newPos[1];
-                    board.set(from, 0);
-                    board.set(to, color);
+            int limit = Math.min(moves.size(), 30); // only search top 30 root moves
 
-                    for (int[] arrow : getLegalMoves(board, newPos[0], newPos[1])) {
-                        int arr = arrow[0] * 11 + arrow[1];
-                        board.set(arr, 3);
+            for (int i = 0; i < limit; i++) {
+                if (System.currentTimeMillis() >= timeLimit) return bestMove;
 
-                        int score = minimax(board, depth - 1, false, color, opponent,
-                                            Integer.MIN_VALUE, Integer.MAX_VALUE, timeLimit);
+                ScoredMove m = moves.get(i);
+                applyMove(board, m, color);
 
-                        board.set(arr, 0);
+                int score = minimax(board, depth - 1, false, color, opponent,
+                        Integer.MIN_VALUE, Integer.MAX_VALUE, timeLimit);
 
-                        if (score > bestScore) {
-                            bestScore = score;
-                            bestMove = new Move(queen[0], queen[1], newPos[0], newPos[1], arrow[0], arrow[1]);
-                        }
-                    }
+                undoMove(board, m, color);
 
-                    board.set(to, 0);
-                    board.set(from, color);
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMove = m;
                 }
             }
 
@@ -400,58 +481,97 @@ public class COSC322Test extends GamePlayer {
 
         private int minimax(ArrayList<Integer> board, int depth, boolean isMaximizing,
                             int myColor, int opponent, int alpha, int beta, long timeLimit) {
-
             if (System.currentTimeMillis() >= timeLimit) return evaluate(board, myColor);
             if (depth == 0) return evaluate(board, myColor);
-
             int current = isMaximizing ? myColor : opponent;
-            boolean hadMove = false;
+            ArrayList<ScoredMove> moves = generateOrderedMoves(board, current);
+            if (moves.isEmpty()) {
+                return isMaximizing ? -100000 : 100000;
+            }
+            int moveLimit;
+            if (depth >= 4) moveLimit = Math.min(moves.size(), 12);
+            else if (depth == 3) moveLimit = Math.min(moves.size(), 18);
+            else moveLimit = Math.min(moves.size(), 30);
             int best = isMaximizing ? Integer.MIN_VALUE : Integer.MAX_VALUE;
+            for (int i = 0; i < moveLimit; i++) {
+                ScoredMove m = moves.get(i);
+                applyMove(board, m, current);
+                int score = minimax(board, depth - 1, !isMaximizing,
+                        myColor, opponent, alpha, beta, timeLimit);
 
-            outer:
-            for (int[] queen : getQueenPositions(board, current)) {
-                for (int[] newPos : getLegalMoves(board, queen[0], queen[1])) {
-                    int from = queen[0] * 11 + queen[1];
-                    int to   = newPos[0] * 11 + newPos[1];
-                    board.set(from, 0);
-                    board.set(to, current);
+                undoMove(board, m, current);
+                if (isMaximizing) {
+                    best = Math.max(best, score);
+                    alpha = Math.max(alpha, best);
+                } else {
+                    best = Math.min(best, score);
+                    beta = Math.min(beta, best);
+                }
+                if (beta <= alpha) break;
+            }
+            return best;
+        }
 
-                    for (int[] arrow : getLegalMoves(board, newPos[0], newPos[1])) {
-                        int arr = arrow[0] * 11 + arrow[1];
-                        board.set(arr, 3);
-                        hadMove = true;
-
-                        int score = minimax(board, depth - 1, !isMaximizing,
-                                            myColor, opponent, alpha, beta, timeLimit);
-
-                        board.set(arr, 0);
-
-                        if (isMaximizing) {
-                            if (score > best) best = score;
-                            if (best > alpha) alpha = best;
-                        } else {
-                            if (score < best) best = score;
-                            if (best < beta) beta = best;
-                        }
-
-                        if (beta <= alpha) {
-                            board.set(to, 0);
-                            board.set(from, current);
-                            break outer; // prune
-                        }
+        private int countArrows(ArrayList<Integer> board) {
+            int count = 0;
+            for (int row = 1; row <= 10; row++) {
+                for (int col = 1; col <= 10; col++) {
+                    if (board.get(row * 11 + col) == 3) {
+                        count++;
                     }
-
-                    board.set(to, 0);
-                    board.set(from, current);
                 }
             }
+            return count;
+        }
 
-            // No moves at all = that side has lost
-            if (!hadMove) {
-                return isMaximizing ? -10000 : 10000;
+        private int reachableWithinTwoQueenMoves(ArrayList<Integer> board, int row, int col) {
+            boolean[][] seen = new boolean[11][11];
+            ArrayDeque<int[]> queue = new ArrayDeque<>();
+            queue.add(new int[]{row, col, 0});
+            seen[row][col] = true;
+            int count = 0;
+
+            while (!queue.isEmpty()) {
+                int[] cur = queue.poll();
+                int r = cur[0], c = cur[1], d = cur[2];
+                if (d == 2) continue;
+                for (int[] move : getLegalMoves(board, r, c)) {
+                    int nr = move[0], nc = move[1];
+                    if (!seen[nr][nc]) {
+                        seen[nr][nc] = true;
+                        count++;
+                        queue.add(new int[]{nr, nc, d + 1});
+                    }
+                }
             }
+            return count;
+        }
 
-            return best;
+        private int regionAccessibility(ArrayList<Integer> board, int color) {
+            int total = 0;
+            for (int[] queen : getQueenPositions(board, color)) {
+                total += reachableWithinTwoQueenMoves(board, queen[0], queen[1]);
+            }
+            return total;
+        }
+
+        private int pressureScore(ArrayList<Integer> board, int myColor) {
+            int opponent = (myColor == 1) ? 2 : 1;
+            int score = 0;
+
+            for (int[] q : getQueenPositions(board, opponent)) {
+                int moves = getLegalMoves(board, q[0], q[1]).size();
+                if (moves <= 2) score += 20;
+                else if (moves <= 5) score += 10;
+                else if (moves <= 8) score += 4;
+            }
+            for (int[] q : getQueenPositions(board, myColor)) {
+                int moves = getLegalMoves(board, q[0], q[1]).size();
+                if (moves <= 2) score -= 20;
+                else if (moves <= 5) score -= 10;
+                else if (moves <= 8) score -= 4;
+            }
+            return score;
         }
 
         /**
@@ -459,14 +579,40 @@ public class COSC322Test extends GamePlayer {
          */
         private int evaluate(ArrayList<Integer> board, int myColor) {
             int opponent = (myColor == 1) ? 2 : 1;
+            int arrows = countArrows(board);
 
             int myMobility = countTotalMoves(board, myColor);
             int oppMobility = countTotalMoves(board, opponent);
             int mobilityScore = myMobility - oppMobility;
+
             int territoryScore = evaluateTerritory(board, myColor, opponent);
             int trappedScore = countTrappedQueens(board, opponent) - countTrappedQueens(board, myColor);
             int localFreedomScore = localFreedom(board, myColor) - localFreedom(board, opponent);
-            return 4 * mobilityScore+ 6 * territoryScore + 8 * trappedScore + 2 * localFreedomScore;
+            int regionScore = regionAccessibility(board, myColor) - regionAccessibility(board, opponent);
+            int pressure = pressureScore(board, myColor);
+
+            if (arrows < 12) {
+                return 3 * mobilityScore
+                    + 8 * territoryScore
+                    + 4 * trappedScore
+                    + 3 * localFreedomScore
+                    + 6 * regionScore
+                    + 5 * pressure;
+            } else if (arrows < 35) {
+                return 4 * mobilityScore
+                    + 6 * territoryScore
+                    + 8 * trappedScore
+                    + 2 * localFreedomScore
+                    + 5 * regionScore
+                    + 7 * pressure;
+            } else {
+                return 7 * mobilityScore
+                    + 3 * territoryScore
+                    + 12 * trappedScore
+                    + 2 * localFreedomScore
+                    + 6 * regionScore
+                    + 9 * pressure;
+            }
         }
 
         private int countTotalMoves(ArrayList<Integer> board, int color) {
@@ -481,7 +627,6 @@ public class COSC322Test extends GamePlayer {
             int trapped = 0;
             for (int[] queen : getQueenPositions(board, color)) {
                 int mobility = getLegalMoves(board, queen[0], queen[1]).size();
-
                 if (mobility <= 2) {
                     trapped += 2;   // very trapped
                 } else if (mobility <= 5) {
@@ -518,13 +663,11 @@ public class COSC322Test extends GamePlayer {
         private int evaluateTerritory(ArrayList<Integer> board, int myColor, int opponent) {
             int[][] myDist = queenDistanceMap(board, myColor);
             int[][] oppDist = queenDistanceMap(board, opponent);
-
             int score = 0;
 
             for (int row = 1; row <= 10; row++) {
                 for (int col = 1; col <= 10; col++) {
                     if (board.get(row * 11 + col) != 0) continue; // only score empty squares
-
                     int md = myDist[row][col];
                     int od = oppDist[row][col];
 
@@ -535,7 +678,6 @@ public class COSC322Test extends GamePlayer {
                     } else if (od < md) {
                         score -= 1;
                     }
-                    // tie = 0
                 }
             }
 
