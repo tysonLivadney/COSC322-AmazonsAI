@@ -3,6 +3,8 @@ package ubc.cosc322;
 import java.util.Map;
 import java.util.ArrayList;
 import java.util.ArrayDeque;
+import java.util.HashMap;
+import java.util.Random;
 
 import ygraph.ai.smartfox.games.amazons.AmazonsGameMessage;
 import ygraph.ai.smartfox.games.BaseGameGUI;
@@ -15,11 +17,36 @@ public class COSC322Test extends GamePlayer {
     private GameClient gameClient = null;
     private BaseGameGUI gamegui = null;
     private ArrayList<Integer> gameBoard = null;
-    private int myColor = 0; // 1 = black, 2 = white
+    private int myColor = 0; // 1 = white, 2 = black
     private AIPlayer ai = new AIPlayer();
+    private static final long[][][] ZOBRIST = new long[11][11][4];
+    private static final Random ZOBRIST_RANDOM = new Random(322);
+
+     static {
+        for (int r = 0; r < 11; r++) {
+            for (int c = 0; c < 11; c++) {
+                for (int piece = 0; piece < 4; piece++) {
+                    ZOBRIST[r][c][piece] = ZOBRIST_RANDOM.nextLong();
+                }
+            }
+        }
+    }
 
     private String userName = null;
     private String passwd = null;
+
+    private long hashBoard(ArrayList<Integer> board) {
+        long hash = 0L;
+        for (int row = 1; row <= 10; row++) {
+            for (int col = 1; col <= 10; col++) {
+                int piece = board.get(row * 11 + col);
+                if (piece != 0) {
+                    hash ^= ZOBRIST[row][col][piece];
+                }
+            }
+        }
+        return hash;
+    }
 
     public static void main(String[] args) {
         COSC322Test player = new COSC322Test(args[0], "cosc322");
@@ -68,16 +95,16 @@ public class COSC322Test extends GamePlayer {
             String whitePlayer = (String) msgDetails.get(AmazonsGameMessage.PLAYER_WHITE);
 
             if (userName.equals(blackPlayer)) {
-                myColor = 1;
-            } else if (userName.equals(whitePlayer)) {
                 myColor = 2;
+            } else if (userName.equals(whitePlayer)) {
+                myColor = 1;
             } else {
                 myColor = 0;
             }
 
-            System.out.println("I am: " + (myColor == 1 ? "Black" : myColor == 2 ? "White" : "Spectator"));
+            System.out.println("I am: " + (myColor == 1 ? "White" : myColor == 2 ? "Black" : "Spectator"));
 
-            if (myColor == 2) {
+            if (myColor == 1) {
                 makeAndSendMove();
             }
 
@@ -224,14 +251,27 @@ public class COSC322Test extends GamePlayer {
         }
     }
 
+    private static class TTEntry {
+        final int depth;
+        final int score;
+
+        TTEntry(int depth, int score) {
+            this.depth = depth;
+            this.score = score;
+        }
+    }
+
     // ------------------------------------------------------------------------
 
     private class AIPlayer {
 
+        private final HashMap<Long, TTEntry> transTable = new HashMap<>();
+        
         Move chooseMove(ArrayList<Integer> board, int color) {
+            
             Move bestMove = null;
             long timeLimit = System.currentTimeMillis() + 5000;
-
+            transTable.clear();
             for (int depth = 1; depth <= 10; depth++) {
                 if (System.currentTimeMillis() >= timeLimit) break;
                 Move candidate = minimaxRoot(board, depth, color, timeLimit);
@@ -288,6 +328,16 @@ public class COSC322Test extends GamePlayer {
             }
 
             int current = isMaximizing ? myColor : opponent;
+
+            long hash = hashBoard(board)
+          ^ (isMaximizing ? 1234567L : 7654321L)
+          ^ (current == 1 ? 1111111L : 2222222L);
+            TTEntry cached = transTable.get(hash);
+            if (cached != null && cached.depth >= depth) {
+                return cached.score;
+            }
+
+            
             boolean hadMove = false;
             int best = isMaximizing ? Integer.MIN_VALUE : Integer.MAX_VALUE;
 
@@ -333,15 +383,16 @@ public class COSC322Test extends GamePlayer {
             }
 
             if (!hadMove) {
-                return isMaximizing ? -10000 : 10000;
+                best = isMaximizing ? -10000 : 10000;
             }
 
+            transTable.put(hash, new TTEntry(depth, best));
             return best;
         }
 
         private int evaluate(ArrayList<Integer> board, int myColor) {
-            int opponent = (myColor == 1) ? 2 : 1;
-            return evaluateTerritory(board, myColor, opponent);
+        int opponent = (myColor == 1) ? 2 : 1;
+        return evaluateTerritory(board, myColor, opponent);
         }
 
         private int evaluateTerritory(ArrayList<Integer> board, int myColor, int opponent) {
