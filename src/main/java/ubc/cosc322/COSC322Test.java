@@ -2,9 +2,6 @@ package ubc.cosc322;
 
 import java.util.Map;
 import java.util.ArrayList;
-import java.util.ArrayDeque;
-import java.util.Arrays;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Random;
 
@@ -189,36 +186,6 @@ public class COSC322Test extends GamePlayer {
         startPondering(cloneBoard(gameBoard), myColor);
     }
 
-    private int[] getLegalMoves(int[] board, int row, int col) {
-        int[] buf = new int[64];
-        int count = 0;
-        int[][] directions = {
-            {1,0},{-1,0},{0,1},{0,-1},{1,1},{1,-1},{-1,1},{-1,-1}
-        };
-        for (int[] dir : directions) {
-            int r = row + dir[0];
-            int c = col + dir[1];
-            while (r >= 1 && r <= 10 && c >= 1 && c <= 10) {
-                if (board[r * 11 + c] == 0) {
-                    buf[count++] = r * 11 + c;
-                    r += dir[0];
-                    c += dir[1];
-                } else break;
-            }
-        }
-        return Arrays.copyOf(buf, count);
-    }
-
-    private int[] getQueenPositions(int[] board, int color) {
-        int[] buf = new int[4];
-        int count = 0;
-        for (int row = 1; row <= 10; row++)
-            for (int col = 1; col <= 10; col++)
-                if (board[row * 11 + col] == color)
-                    buf[count++] = row * 11 + col;
-        return buf;
-    }
-
     private int[] cloneBoard(int[] board) {
         return board.clone();
     }
@@ -257,49 +224,29 @@ public class COSC322Test extends GamePlayer {
         }
     }
 
-    static class TTEntry {
-        static final int EXACT = 0, LOWER = 1, UPPER = 2;
-        final int depth, score, flag;
-        TTEntry(int depth, int score, int flag) {
-            this.depth = depth; this.score = score; this.flag = flag;
-        }
-    }
-
     private static class ScoredMove {
         final Move move;
         final int score;
         ScoredMove(Move m, int s) { this.move = m; this.score = s; }
     }
 
-    //Player class
-    //------------
     private class AIPlayer {
-        private final int[] territoryQueue = new int[121];
-        private final int[] myDist = new int[121];
-        private final int[] oppDist = new int[121];
 
-        private static final int TT_SIZE = 1 << 20; 
+        // killers[depth] = { k1_tr, k1_tc, k2_tr, k2_tc } — only used at depth >= 4
+        private final int[][] killers = new int[101][4];
+        // history[fromFlat][toFlat] — only used at depth >= 4
+        private final int[][] history = new int[121][121];
+
+        private static final int TT_SIZE = 1 << 20;
         private final long[] ttKeys = new long[TT_SIZE];
-        private final long[] ttData = new long[TT_SIZE]; 
+        private final long[] ttData = new long[TT_SIZE];
 
         private int nodesExplored = 0;
-        private int numArrows = 0;
+        private int gameMoveCount = 0;
         private volatile boolean pondering = false;
 
-        // Directions for Queen/Arrow moves
         private final int[] dr = {-1, -1, -1, 0, 0, 1, 1, 1};
         private final int[] dc = {-1, 0, 1, -1, 1, -1, 0, 1};
-
-        private int[] myQueens = new int[4];
-        private int[] oppQueens = new int[4];
-
-        private void initQueens(int[] board, int myColor, int oppColor) {
-            int myCount = 0, oppCount = 0;
-            for (int i = 12; i < 110; i++) {
-                if (board[i] == myColor) myQueens[myCount++] = i;
-                else if (board[i] == oppColor) oppQueens[oppCount++] = i;
-            }
-}
 
         void ponder(int[] board, int color) {
             pondering = true;
@@ -314,11 +261,14 @@ public class COSC322Test extends GamePlayer {
 
         Move chooseMove(int[] board, int color) {
             nodesExplored = 0;
+            gameMoveCount++;
+            for (int[] row : killers) java.util.Arrays.fill(row, 0);
+            for (int[] row : history) java.util.Arrays.fill(row, 0);
             long hash = hashBoard(board);
             if (color == 1) hash ^= ZOBRIST_WHITE_TO_MOVE;
-            
+
             Move bestMove = null;
-            long timeLimit = System.currentTimeMillis() + 28000;
+            long timeLimit = System.currentTimeMillis() + 5000;
 
             for (int depth = 1; depth <= 100; depth++) {
                 if (System.currentTimeMillis() >= timeLimit) break;
@@ -328,7 +278,6 @@ public class COSC322Test extends GamePlayer {
                     System.out.println("Depth: " + depth + " | Nodes: " + nodesExplored);
                 }
             }
-            System.out.println("TT size: " + java.util.Arrays.stream(ttKeys).filter(k -> k != 0).count());
             return bestMove;
         }
 
@@ -345,11 +294,13 @@ public class COSC322Test extends GamePlayer {
                         int tR = qR + dr[i], tC = qC + dc[i];
                         while (tR >= 1 && tR <= 10 && tC >= 1 && tC <= 10 && board[tR * 11 + tC] == 0) {
                             board[qIdx] = 0; board[tR * 11 + tC] = color;
+                            // Root ordering: full evaluate is fine here, called once per root move
+                            int rootScore = evaluate(board, color);
                             for (int j = 0; j < 8; j++) {
                                 int aR = tR + dr[j], aC = tC + dc[j];
                                 while (aR >= 1 && aR <= 10 && aC >= 1 && aC <= 10 && board[aR * 11 + aC] == 0) {
                                     board[aR * 11 + aC] = 3;
-                                    candidates.add(new ScoredMove(new Move(qR, qC, tR, tC, aR, aC), evaluate(board, color)));
+                                    candidates.add(new ScoredMove(new Move(qR, qC, tR, tC, aR, aC), rootScore));
                                     board[aR * 11 + aC] = 0;
                                     aR += dr[j]; aC += dc[j];
                                 }
@@ -369,11 +320,20 @@ public class COSC322Test extends GamePlayer {
             for (ScoredMove sm : candidates) {
                 if (!pondering && System.currentTimeMillis() >= timeLimit) break;
                 Move m = sm.move;
-                long nextHash = hash ^ ZOBRIST[m.fr][m.fc][color] ^ ZOBRIST[m.tr][m.tc][color] ^ ZOBRIST[m.ar][m.ac][3] ^ ZOBRIST_WHITE_TO_MOVE;
-                
-                board[m.fr * 11 + m.fc] = 0; board[m.tr * 11 + m.tc] = color; board[m.ar * 11 + m.ac] = 3;
-                int score = -minimax(board, nextHash, depth - 1, opponent, color, Integer.MIN_VALUE + 1, -alpha, timeLimit);
-                board[m.ar * 11 + m.ac] = 0; board[m.tr * 11 + m.tc] = 0; board[m.fr * 11 + m.fc] = color;
+                long nextHash = hash
+                    ^ ZOBRIST[m.fr][m.fc][color]
+                    ^ ZOBRIST[m.tr][m.tc][color]
+                    ^ ZOBRIST[m.ar][m.ac][3]
+                    ^ ZOBRIST_WHITE_TO_MOVE;
+
+                board[m.fr * 11 + m.fc] = 0;
+                board[m.tr * 11 + m.tc] = color;
+                board[m.ar * 11 + m.ac] = 3;
+                int score = -minimax(board, nextHash, depth - 1, opponent, color,
+                                     Integer.MIN_VALUE + 1, -alpha, timeLimit);
+                board[m.ar * 11 + m.ac] = 0;
+                board[m.tr * 11 + m.tc] = 0;
+                board[m.fr * 11 + m.fc] = color;
 
                 if (score > alpha) {
                     alpha = score;
@@ -383,66 +343,118 @@ public class COSC322Test extends GamePlayer {
             return bestMove;
         }
 
-        private int minimax(int[] board, long hash, int depth, int color, int opponent, int alpha, int beta, long timeLimit) {
+        private int minimax(int[] board, long hash, int depth, int color,
+                            int opponent, int alpha, int beta, long timeLimit) {
             nodesExplored++;
-            if (depth <= 0 || (!pondering && System.currentTimeMillis() >= timeLimit)) return evaluate(board, color);
+            if (depth <= 0 || (!pondering && System.currentTimeMillis() >= timeLimit))
+                return evaluate(board, color);
 
             int ttIdx = (int)(hash & (TT_SIZE - 1));
             if (ttKeys[ttIdx] == hash) {
                 long data = ttData[ttIdx];
-                if ((int)(data >> 40) >= depth) {
-                    int ttFlag = (int)((data >> 32) & 0xFF);
+                if ((int)((data >> 40) & 0xFF) >= depth) {
+                    int ttFlag  = (int)((data >> 32) & 0xFF);
                     int ttScore = (int)data;
                     if (ttFlag == 0) return ttScore;
-                    if (ttFlag == 1 && ttScore <= alpha) return alpha;
-                    if (ttFlag == 2 && ttScore >= beta) return beta;
+                    if (ttFlag == 1 && ttScore <= alpha) return ttScore;
+                    if (ttFlag == 2 && ttScore >= beta)  return ttScore;
                 }
             }
 
-            int best = Integer.MIN_VALUE + 1;
-            boolean moved = false;
+            int[] moves  = new int[6 * 3000];
+            int[] scores = new int[3000];
+            int moveCount = 0;
 
-            outer: for (int qR = 1; qR <= 10; qR++) {
+            for (int qR = 1; qR <= 10; qR++) {
                 for (int qC = 1; qC <= 10; qC++) {
                     int qIdx = qR * 11 + qC;
                     if (board[qIdx] != color) continue;
-
                     for (int i = 0; i < 8; i++) {
                         int tR = qR + dr[i], tC = qC + dc[i];
-                        while (tR >= 1 && tR <= 10 && tC >= 1 && tC <= 10 && board[tR * 11 + tC] == 0) {
-                            board[qIdx] = 0; board[tR * 11 + tC] = color;
-                            long queenHash = hash ^ ZOBRIST[qR][qC][color] ^ ZOBRIST[tR][tC][color];
-                            
+                        while (tR >= 1 && tR <= 10 && tC >= 1 && tC <= 10 && board[tR*11+tC] == 0) {
+                            board[qIdx] = 0; board[tR*11+tC] = color;
+
+                            // Cheap ordering: queen mobility only (O(8 rays), no opponent scan)
+                            // At depth >= 4, blend in history and killer bonuses
+                            int qMob = queenMobility(board, tR, tC);
+                            int fromFlat = qR * 11 + qC;
+                            int toFlat   = tR * 11 + tC;
+                            int baseScore = qMob
+                                + (depth >= 4 ? history[fromFlat][toFlat] : 0)
+                                + (depth >= 4 && tR == killers[depth][0] && tC == killers[depth][1] ? 5000 : 0)
+                                + (depth >= 4 && tR == killers[depth][2] && tC == killers[depth][3] ? 3000 : 0);
+
                             for (int j = 0; j < 8; j++) {
                                 int aR = tR + dr[j], aC = tC + dc[j];
-                                while (aR >= 1 && aR <= 10 && aC >= 1 && aC <= 10 && board[aR * 11 + aC] == 0) {
-                                    board[aR * 11 + aC] = 3;
-                                    moved = true;
-                                    numArrows++;
-                                    int score = -minimax(board, queenHash ^ ZOBRIST[aR][aC][3] ^ ZOBRIST_WHITE_TO_MOVE, depth - 1, opponent, color, -beta, -Math.max(alpha, best), timeLimit);
-                                    numArrows--;
-                                    board[aR * 11 + aC] = 0;
-                                    
-                                    if (score > best){
-                                        best = score;
-                                        if (best > alpha) alpha = best;
-                                    } 
-                                        
-                                    if (best >= beta) {
-                                        board[tR * 11 + tC] = 0; board[qIdx] = color;
-                                        break outer;
+                                while (aR >= 1 && aR <= 10 && aC >= 1 && aC <= 10 && board[aR*11+aC] == 0) {
+                                    board[aR*11+aC] = 3;
+                                    if (moveCount < 3000) {
+                                        int s = moveCount * 6;
+                                        moves[s]   = qR; moves[s+1] = qC;
+                                        moves[s+2] = tR; moves[s+3] = tC;
+                                        moves[s+4] = aR; moves[s+5] = aC;
+                                        // Arrow ordering: prefer arrows that reduce own mobility least
+                                        scores[moveCount] = baseScore - queenMobility(board, tR, tC);
+                                        moveCount++;
                                     }
+                                    board[aR*11+aC] = 0;
                                     aR += dr[j]; aC += dc[j];
                                 }
                             }
-                            board[tR * 11 + tC] = 0; board[qIdx] = color;
+                            board[tR*11+tC] = 0; board[qIdx] = color;
                             tR += dr[i]; tC += dc[i];
                         }
                     }
                 }
             }
 
-            if (!moved) return -10000 + (100 - depth);
+            if (moveCount == 0) return -10000 + (100 - depth);
+
+            // Insertion sort descending
+            for (int i = 1; i < moveCount; i++) {
+                int key = scores[i];
+                int ki  = i * 6;
+                int m0=moves[ki],m1=moves[ki+1],m2=moves[ki+2],m3=moves[ki+3],m4=moves[ki+4],m5=moves[ki+5];
+                int j = i - 1;
+                while (j >= 0 && scores[j] < key) {
+                    scores[j+1] = scores[j];
+                    int ji = j * 6, ji1 = (j+1) * 6;
+                    moves[ji1]=moves[ji]; moves[ji1+1]=moves[ji+1]; moves[ji1+2]=moves[ji+2];
+                    moves[ji1+3]=moves[ji+3]; moves[ji1+4]=moves[ji+4]; moves[ji1+5]=moves[ji+5];
+                    j--;
+                }
+                scores[j+1] = key;
+                int ji1 = (j+1)*6;
+                moves[ji1]=m0; moves[ji1+1]=m1; moves[ji1+2]=m2;
+                moves[ji1+3]=m3; moves[ji1+4]=m4; moves[ji1+5]=m5;
+            }
+
+            int best = Integer.MIN_VALUE + 1;
+            for (int idx = 0; idx < moveCount; idx++) {
+                if (!pondering && System.currentTimeMillis() >= timeLimit) break;
+                int s = idx * 6;
+                int fr=moves[s],fc=moves[s+1],tr=moves[s+2],tc=moves[s+3],ar=moves[s+4],ac=moves[s+5];
+                long queenHash = hash ^ ZOBRIST[fr][fc][color] ^ ZOBRIST[tr][tc][color];
+                board[fr*11+fc]=0; board[tr*11+tc]=color; board[ar*11+ac]=3;
+                int score = -minimax(board, queenHash ^ ZOBRIST[ar][ac][3] ^ ZOBRIST_WHITE_TO_MOVE,
+                                     depth-1, opponent, color, -beta, -Math.max(alpha, best), timeLimit);
+                board[ar*11+ac]=0; board[tr*11+tc]=0; board[fr*11+fc]=color;
+
+                if (score > best) { best = score; if (best > alpha) alpha = best; }
+                if (best >= beta) {
+                    // Only record killer/history at depth >= 4 where they're used
+                    if (depth >= 4) {
+                        killers[depth][2] = killers[depth][0];
+                        killers[depth][3] = killers[depth][1];
+                        killers[depth][0] = tr;
+                        killers[depth][1] = tc;
+                        int fromFlat = fr * 11 + fc;
+                        int toFlat   = tr * 11 + tc;
+                        history[fromFlat][toFlat] = Math.min(history[fromFlat][toFlat] + depth * depth, 9000);
+                    }
+                    break;
+                }
+            }
 
             ttKeys[ttIdx] = hash;
             int flag = (best <= alpha) ? 1 : (best >= beta) ? 2 : 0;
@@ -450,69 +462,82 @@ public class COSC322Test extends GamePlayer {
             return best;
         }
 
-        private int evaluate(int[] board, int color) {
-            int opp = (color == 1) ? 2 : 1;
-            
-            //switch to better heuristic after about 15 moves
-            if (numArrows < 30) {
-                 return countMovesFast(board, color) - countMovesFast(board, opp);
+        private int queenMobility(int[] board, int r, int c) {
+            int count = 0;
+            for (int i = 0; i < 8; i++) {
+                int nr = r + dr[i], nc = c + dc[i];
+                while (nr >= 1 && nr <= 10 && nc >= 1 && nc <= 10 && board[nr*11+nc] == 0) {
+                    count++; nr += dr[i]; nc += dc[i];
+                }
             }
-             //scale since number is small normally
-            return evaluateTerritory(board, color, opp) * 10;
-            
+            return count;
         }
 
+        private int evaluate(int[] board, int color) {
+            int opp = (color == 1) ? 2 : 1;
+            if (gameMoveCount < 8) {
+                return countMovesFast(board, color) - countMovesFast(board, opp);
+            }
+            return evaluateTerritory(board, color, opp) * 10
+                 + (countMovesFast(board, color) - countMovesFast(board, opp));
+        }
 
         private int evaluateTerritory(int[] board, int myColor, int opponent) {
-            
-            computeDistances(board, myColor, myDist, territoryQueue);
-            computeDistances(board, opponent, oppDist, territoryQueue);
-            
+            int[] myDist  = computeDistances(board, myColor);
+            int[] oppDist = computeDistances(board, opponent);
+
             int score = 0;
-            for (int i = 12; i < 110; i++) {
-                if (board[i] == 0) {
-                    if (myDist[i] < oppDist[i]) score++;
-                    else if (oppDist[i] < myDist[i]) score--;
+            for (int r = 1; r <= 10; r++) {
+                for (int c = 1; c <= 10; c++) {
+                    int i = r * 11 + c;
+                    if (board[i] == 0) {
+                        int md = myDist[i];
+                        int od = oppDist[i];
+                        if (md < od) score += (od - md);
+                        else if (od < md) score -= (md - od);
+                    }
                 }
             }
             return score;
         }
 
-        private int territoryToken = 1;
-        private int[] visited = new int[121];
-
-        private void computeDistances(int[] board, int color, int[] dist, int[] queue) {
-            territoryToken++;
+        private int[] computeDistances(int[] board, int color) {
+            int[] dist    = new int[121];
+            int[] queue   = new int[121];
+            boolean[] vis = new boolean[121];
             int head = 0, tail = 0;
-            
-            // Initialize BFS with all 4 queen positions
-            for (int i = 12; i < 110; i++) {
-                if (board[i] == color) {
-                    dist[i] = 0;
-                    visited[i] = territoryToken; //mark visited
-                    queue[tail++] = i;
-                }
-            }
-            
-            while (head < tail) {
-                int curr = queue[head++];
-                int d = dist[curr] + 1;
-                
-                int r = curr / 11, c = curr % 11;
-                for (int i = 0; i < 8; i++) {
-                    int nr = r + dr[i], nc = c + dc[i];
-                    int next = nr * 11 + nc;
-                    while (nr >= 1 && nr <= 10 && nc >= 1 && nc <= 10 && board[next] == 0) {
-                        if (visited[next] != territoryToken) { // Only process if not seen in THIS run
-                            dist[next] = d;
-                            visited[next] = territoryToken;
-                            queue[tail++] = next;
-                        }
-                        nr += dr[i]; nc += dc[i];
-                        next = nr * 11 + nc;
+
+            for (int r = 1; r <= 10; r++) {
+                for (int c = 1; c <= 10; c++) {
+                    int i = r * 11 + c;
+                    if (board[i] == color) {
+                        dist[i] = 0;
+                        vis[i] = true;
+                        queue[tail++] = i;
                     }
                 }
             }
+
+            while (head < tail) {
+                int curr = queue[head++];
+                int d = dist[curr] + 1;
+                int r = curr / 11, c = curr % 11;
+
+                for (int i = 0; i < 8; i++) {
+                    int nr = r + dr[i], nc = c + dc[i];
+                    while (nr >= 1 && nr <= 10 && nc >= 1 && nc <= 10) {
+                        int next = nr * 11 + nc;
+                        if (board[next] != 0) break;
+                        if (!vis[next]) {
+                            dist[next] = d;
+                            vis[next] = true;
+                            queue[tail++] = next;
+                        }
+                        nr += dr[i]; nc += dc[i];
+                    }
+                }
+            }
+            return dist;
         }
 
         private int countMovesFast(int[] board, int color) {
@@ -531,5 +556,4 @@ public class COSC322Test extends GamePlayer {
             return count;
         }
     }
-    
 }
